@@ -13,7 +13,8 @@
   "pi": {
     "extensions": [
       "./copy-code/index.ts",
-      "./context-details/index.ts"
+      "./context-details/index.ts",
+      "./block/index.ts"
     ]
   },
   "devDependencies": {
