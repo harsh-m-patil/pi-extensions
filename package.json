@@ -10,11 +10,16 @@
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@10.28.0",
-	 "pi": {
-		"extensions": ["./copy-code/index.ts"]
+  "pi": {
+    "extensions": [
+      "./copy-code/index.ts",
+      "./context-details/index.ts"
+    ]
   },
   "devDependencies": {
+    "@earendil-works/pi-agent-core": "^0.78.0",
     "@earendil-works/pi-ai": "^0.78.0",
-    "@earendil-works/pi-coding-agent": "^0.78.0"
+    "@earendil-works/pi-coding-agent": "^0.78.0",
+    "@earendil-works/pi-tui": "^0.78.0"
   }
 }
