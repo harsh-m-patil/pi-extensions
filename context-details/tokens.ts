@@ -1,11 +1,20 @@
 import {
 	buildSessionContext,
+	convertToLlm,
 	estimateTokens,
 } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { estimateContextTokens, type AgentMessage } from "@earendil-works/pi-agent-core";
 
-export type ContextCategoryId = "systemPrompt" | "toolDefinitions" | "rules" | "skills" | "conversation";
+export type ContextCategoryId =
+	| "systemPrompt"
+	| "toolDefinitions"
+	| "rules"
+	| "skills"
+	| "userMessages"
+	| "assistantMessages"
+	| "toolCalls"
+	| "toolResults";
 
 export interface ContextCategory {
 	id: ContextCategoryId;
@@ -27,7 +36,10 @@ const CATEGORY_LABELS: Record<ContextCategoryId, string> = {
 	toolDefinitions: "Tool definitions",
 	rules: "Rules",
 	skills: "Skills (index in system prompt)",
-	conversation: "Conversation",
+	userMessages: "User messages",
+	assistantMessages: "Assistant messages",
+	toolCalls: "Tool calls",
+	toolResults: "Tool results",
 };
 
 /** Pi only exposes estimateTokens on AgentMessage — wrap plain text the same way. */
@@ -79,12 +91,84 @@ const estimateToolsTokens = (tools: ToolInfo[]): number => {
 	return estimateTextTokens(JSON.stringify(payload));
 };
 
-const estimateConversationTokens = (messages: AgentMessage[]): number => {
+const splitTotalByWeights = (total: number, weights: number[]): number[] => {
+	const weightSum = weights.reduce((sum, weight) => sum + weight, 0);
+	if (weightSum <= 0) {
+		return weights.map((_weight, index) => (index === 0 ? total : 0));
+	}
+
+	const scaled = weights.map((weight) => Math.round((total * weight) / weightSum));
+	const roundedSum = scaled.reduce((sum, value) => sum + value, 0);
+	const drift = total - roundedSum;
+	if (drift !== 0) {
+		let largestIndex = 0;
+		for (let i = 1; i < scaled.length; i++) {
+			if (scaled[i] > scaled[largestIndex]) {
+				largestIndex = i;
+			}
+		}
+		scaled[largestIndex] += drift;
+	}
+	return scaled;
+};
+
+const estimateAssistantTextTokens = (message: Extract<ReturnType<typeof convertToLlm>[number], { role: "assistant" }>): number => {
 	let total = 0;
-	for (const message of messages) {
-		total += estimateTokens(message);
+	for (const block of message.content) {
+		if (block.type === "text") {
+			total += estimateTextTokens(block.text);
+		} else if (block.type === "thinking") {
+			total += estimateTextTokens(block.thinking);
+		}
 	}
 	return total;
+};
+
+const estimateAssistantToolCallTokens = (
+	message: Extract<ReturnType<typeof convertToLlm>[number], { role: "assistant" }>,
+): number => {
+	const toolCalls = message.content.filter((block) => block.type === "toolCall");
+	if (toolCalls.length === 0) {
+		return 0;
+	}
+	return estimateTextTokens(JSON.stringify(toolCalls));
+};
+
+const estimateConversationBreakdown = (messages: AgentMessage[]): Record<
+	Extract<ContextCategoryId, "userMessages" | "assistantMessages" | "toolCalls" | "toolResults">,
+	number
+> => {
+	const breakdown = {
+		userMessages: 0,
+		assistantMessages: 0,
+		toolCalls: 0,
+		toolResults: 0,
+	};
+
+	for (const message of convertToLlm(messages)) {
+		if (message.role === "user") {
+			breakdown.userMessages += estimateTokens(message);
+			continue;
+		}
+
+		if (message.role === "toolResult") {
+			breakdown.toolResults += estimateTokens(message);
+			continue;
+		}
+
+		const totalTokens = estimateTokens(message);
+		const assistantTextTokens = estimateAssistantTextTokens(message);
+		const toolCallTokens = estimateAssistantToolCallTokens(message);
+		const [assistantTokens, splitToolCallTokens] = splitTotalByWeights(totalTokens, [
+			assistantTextTokens,
+			toolCallTokens,
+		]);
+
+		breakdown.assistantMessages += assistantTokens;
+		breakdown.toolCalls += splitToolCallTokens;
+	}
+
+	return breakdown;
 };
 
 const scalePartsToTotal = (parts: Record<ContextCategoryId, number>, total: number): Record<ContextCategoryId, number> => {
@@ -130,13 +214,17 @@ export const computeContextBreakdown = (input: {
 	const contextEstimate = estimateContextTokens(messages);
 
 	const { systemPrompt, rules, skills } = splitSystemPrompt(input.getSystemPrompt());
+	const conversationBreakdown = estimateConversationBreakdown(messages);
 
 	const rawParts: Record<ContextCategoryId, number> = {
 		systemPrompt: estimateTextTokens(systemPrompt),
 		toolDefinitions: estimateToolsTokens(input.getAllTools()),
 		rules: estimateTextTokens(rules),
 		skills: estimateTextTokens(skills),
-		conversation: estimateConversationTokens(messages),
+		userMessages: conversationBreakdown.userMessages,
+		assistantMessages: conversationBreakdown.assistantMessages,
+		toolCalls: conversationBreakdown.toolCalls,
+		toolResults: conversationBreakdown.toolResults,
 	};
 
 	const providerTotal = usage?.tokens ?? null;
@@ -154,7 +242,10 @@ export const computeContextBreakdown = (input: {
 			["toolDefinitions", parts.toolDefinitions],
 			["rules", parts.rules],
 			["skills", parts.skills],
-			["conversation", parts.conversation],
+			["userMessages", parts.userMessages],
+			["assistantMessages", parts.assistantMessages],
+			["toolCalls", parts.toolCalls],
+			["toolResults", parts.toolResults],
 		] as const
 	)
 		.filter(([, tokens]) => tokens > 0)
