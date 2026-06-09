@@ -69,7 +69,7 @@ const formatBlockLabel = (block: ReturnType<typeof extractCodeBlocks>[number], i
 	return `${index + 1}. [${lang}] ${truncated}`;
 };
 
-const CLIPBOARD_TOOLS = ["wl-copy", "xclip", "xsel", "termux-clipboard-set"] as const;
+const CLIPBOARD_TOOLS = ["wl-copy", "xclip", "pbcopy", "xsel", "termux-clipboard-set"] as const;
 
 const hasClipboardTool = async (pi: ExtensionAPI) => {
 	for (const tool of CLIPBOARD_TOOLS) {
@@ -133,7 +133,7 @@ export default function copyCodeExtension(pi: ExtensionAPI) {
 				await showInEditor(
 					ctx,
 					selectedBlock,
-					"No clipboard tool found (install wl-clipboard). Showing code for manual copy.",
+					"No clipboard tool found (please install one). Showing code for manual copy.",
 				);
 				return;
 			}
